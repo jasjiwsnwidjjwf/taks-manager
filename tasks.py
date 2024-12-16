@@ -1,87 +1,91 @@
 import streamlit as st
-from datetime import datetime
-from database import criar_usuario, criar_tarefa, excluir_tarefa, listar_tarefas, autenticar_usuario
 import pandas as pd
+import sqlite3
 
-# Função para registro de usuário
-def registrar_usuario():
-    username = st.text_input("Escolha um nome de usuário")
-    password = st.text_input("Escolha uma senha", type='password')
+# Configuração do banco de dados
+def init_db():
+    conn = sqlite3.connect("tasks.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT,
+            tarefa TEXT,
+            status TEXT,
+            prioridade TEXT,
+            prazo TEXT
+        )
+    """)
+    conn.commit()
+    return conn
 
-    if st.button("Registrar"):
-        usuario = criar_usuario(username, password)
-        if usuario:
-            st.success(f"Usuário {username} registrado com sucesso!")
-        else:
-            st.error("Nome de usuário já existe. Tente outro.")
+# Adicionar uma nova tarefa ao banco de dados
+def add_task(conn, usuario, tarefa, status, prioridade, prazo):
+    c = conn.cursor()
+    c.execute("INSERT INTO tasks (usuario, tarefa, status, prioridade, prazo) VALUES (?, ?, ?, ?, ?)",
+              (usuario, tarefa, status, prioridade, prazo))
+    conn.commit()
 
-# Função para login de usuário
-def login_usuario():
-    username = st.text_input("Nome de usuário")
-    password = st.text_input("Senha", type='password')
+# Carregar tarefas do banco de dados
+def load_tasks(conn, usuario):
+    c = conn.cursor()
+    c.execute("SELECT id, tarefa, status, prioridade, prazo FROM tasks WHERE usuario = ?", (usuario,))
+    return pd.DataFrame(c.fetchall(), columns=["ID", "Tarefa", "Status", "Prioridade", "Prazo"])
 
-    if st.button("Entrar"):
-        usuario = autenticar_usuario(username, password)
-        if usuario:
-            st.session_state.usuario_id = usuario.id
-            st.session_state.username = username
-            st.success(f"Bem-vindo, {username}!")
-        else:
-            st.error("Usuário ou senha incorretos. Tente novamente.")
+# Excluir uma tarefa do banco de dados
+def delete_task(conn, task_id):
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
 
-# Função para exibir e gerenciar tarefas
-def gerenciar_tarefas():
-    usuario_id = st.session_state.usuario_id
-    tarefas = listar_tarefas(usuario_id)
-
-    if tarefas:
-        tarefas_df = pd.DataFrame([{
-            'ID': t.id, 'Título': t.titulo, 'Status': t.status, 'Data de Vencimento': t.data_vencimento
-        } for t in tarefas])
-        st.table(tarefas_df)
-
-        tarefa_id = st.selectbox("Escolha uma tarefa para excluir", tarefas_df['ID'])
-        if st.button("Excluir Tarefa"):
-            if excluir_tarefa(tarefa_id):
-                st.success("Tarefa excluída com sucesso!")
-            else:
-                st.error("Erro ao excluir tarefa.")
-    else:
-        st.info("Você não tem tarefas cadastradas.")
-
-# Função para adicionar novas tarefas
-def adicionar_tarefa():
-    titulo = st.text_input("Título da Tarefa")
-    descricao = st.text_area("Descrição da Tarefa")
-    status = st.selectbox("Status", ["to_do", "doing", "done"])
-    data_vencimento = st.date_input("Data de Vencimento", min_value=datetime.today())
-
-    if st.button("Adicionar Tarefa"):
-        criar_tarefa(st.session_state.usuario_id, titulo, descricao, status, data_vencimento)
-        st.success("Tarefa adicionada com sucesso!")
-
-# Função principal
+# Aplicação principal
 def main():
-    st.title("Gerenciador de Tarefas")
+    st.title("Gerenciador de Projetos")
+    conn = init_db()
 
-    if "usuario_id" not in st.session_state:
-        escolha = st.radio("Escolha uma opção", ("Login", "Registrar"))
-        if escolha == "Login":
-            login_usuario()
-        elif escolha == "Registrar":
-            registrar_usuario()
-    else:
-        st.sidebar.write(f"Olá, {st.session_state.username}")
-        if st.sidebar.button("Sair"):
-            del st.session_state["usuario_id"]
-            del st.session_state["username"]
-            st.experimental_rerun()
+    # Autenticação simples
+    st.sidebar.header("Autenticação")
+    usuario = st.sidebar.text_input("Digite seu nome de usuário", "Convidado")
+    if not usuario:
+        st.warning("Por favor, insira um nome de usuário para continuar.")
+        st.stop()
 
+    # Menu
+    st.sidebar.header("Menu")
+    option = st.sidebar.selectbox("Escolha uma ação", ["Visualizar Tarefas", "Adicionar Nova Tarefa", "Excluir Tarefa"])
+
+    if option == "Visualizar Tarefas":
+        st.subheader(f"Tarefas de {usuario}")
+        tasks = load_tasks(conn, usuario)
+        if tasks.empty:
+            st.info("Nenhuma tarefa encontrada.")
+        else:
+            st.dataframe(tasks)
+
+    elif option == "Adicionar Nova Tarefa":
         st.subheader("Adicionar Nova Tarefa")
-        adicionar_tarefa()
+        task_name = st.text_input("Nome da Tarefa")
+        task_status = st.selectbox("Status", ["To Do", "Doing", "Done"])
+        task_priority = st.selectbox("Prioridade", ["Baixa", "Média", "Alta"])
+        task_deadline = st.date_input("Prazo")
 
-        st.subheader("Minhas Tarefas")
-        gerenciar_tarefas()
+        if st.button("Salvar Tarefa"):
+            if task_name.strip():
+                add_task(conn, usuario, task_name, task_status, task_priority, str(task_deadline))
+                st.success("Tarefa adicionada com sucesso!")
+            else:
+                st.error("O nome da tarefa não pode ser vazio.")
+
+    elif option == "Excluir Tarefa":
+        st.subheader("Excluir Tarefa")
+        tasks = load_tasks(conn, usuario)
+        if tasks.empty:
+            st.info("Nenhuma tarefa encontrada para exclusão.")
+        else:
+            task_id = st.selectbox("Selecione o ID da tarefa para excluir", tasks["ID"])
+            if st.button("Excluir"):
+                delete_task(conn, task_id)
+                st.success("Tarefa excluída com sucesso!")
 
 if __name__ == "__main__":
     main()
