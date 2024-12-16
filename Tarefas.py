@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import matplotlib.pyplot as plt
 
 # Configuração do banco de dados
 def init_db():
@@ -38,6 +39,34 @@ def delete_task(conn, task_id):
     c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
 
+# Alterar uma tarefa existente
+def update_task(conn, task_id, tarefa, status, prioridade, prazo):
+    c = conn.cursor()
+    c.execute("""
+        UPDATE tasks SET tarefa = ?, status = ?, prioridade = ?, prazo = ? WHERE id = ?
+    """, (tarefa, status, prioridade, prazo, task_id))
+    conn.commit()
+
+# Gerar gráfico de contagem por status
+def plot_status_count(tasks):
+    status_counts = tasks['Status'].value_counts()
+    fig, ax = plt.subplots()
+    status_counts.plot(kind='bar', ax=ax)
+    ax.set_title('Contagem de Tarefas por Status')
+    ax.set_xlabel('Status')
+    ax.set_ylabel('Contagem')
+    st.pyplot(fig)
+
+# Gerar gráfico de contagem por prioridade
+def plot_priority_count(tasks):
+    priority_counts = tasks['Prioridade'].value_counts()
+    fig, ax = plt.subplots()
+    priority_counts.plot(kind='bar', ax=ax)
+    ax.set_title('Contagem de Tarefas por Prioridade')
+    ax.set_xlabel('Prioridade')
+    ax.set_ylabel('Contagem')
+    st.pyplot(fig)
+
 # Aplicação principal
 def main():
     st.title("Gerenciador de Projetos")
@@ -52,7 +81,7 @@ def main():
 
     # Menu
     st.sidebar.header("Menu")
-    option = st.sidebar.selectbox("Escolha uma ação", ["Visualizar Tarefas", "Adicionar Nova Tarefa", "Excluir Tarefa"])
+    option = st.sidebar.selectbox("Escolha uma ação", ["Visualizar Tarefas", "Adicionar Nova Tarefa", "Alterar Tarefa", "Excluir Tarefa"])
 
     if option == "Visualizar Tarefas":
         st.subheader(f"Tarefas de {usuario}")
@@ -61,6 +90,9 @@ def main():
             st.info("Nenhuma tarefa encontrada.")
         else:
             st.dataframe(tasks)
+            # Exibir gráficos
+            plot_status_count(tasks)
+            plot_priority_count(tasks)
 
     elif option == "Adicionar Nova Tarefa":
         st.subheader("Adicionar Nova Tarefa")
@@ -75,6 +107,27 @@ def main():
                 st.success("Tarefa adicionada com sucesso!")
             else:
                 st.error("O nome da tarefa não pode ser vazio.")
+
+    elif option == "Alterar Tarefa":
+        st.subheader("Alterar Tarefa")
+        tasks = load_tasks(conn, usuario)
+        if tasks.empty:
+            st.info("Nenhuma tarefa encontrada para alterar.")
+        else:
+            task_id = st.selectbox("Selecione o ID da tarefa para alterar", tasks["ID"])
+            selected_task = tasks[tasks["ID"] == task_id].iloc[0]
+            
+            task_name = st.text_input("Nome da Tarefa", selected_task['Tarefa'])
+            task_status = st.selectbox("Status", ["To Do", "Doing", "Done"], index=["To Do", "Doing", "Done"].index(selected_task['Status']))
+            task_priority = st.selectbox("Prioridade", ["Baixa", "Média", "Alta"], index=["Baixa", "Média", "Alta"].index(selected_task['Prioridade']))
+            task_deadline = st.date_input("Prazo", pd.to_datetime(selected_task['Prazo']))
+
+            if st.button("Atualizar Tarefa"):
+                if task_name.strip():
+                    update_task(conn, task_id, task_name, task_status, task_priority, str(task_deadline))
+                    st.success("Tarefa atualizada com sucesso!")
+                else:
+                    st.error("O nome da tarefa não pode ser vazio.")
 
     elif option == "Excluir Tarefa":
         st.subheader("Excluir Tarefa")
