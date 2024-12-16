@@ -1,91 +1,146 @@
 import streamlit as st
-import pandas as pd
-import sqlite3
+import psycopg2
+import os
+from datetime import datetime
 
-# Configuração do banco de dados
-def init_db():
-    conn = sqlite3.connect("tasks.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT,
-            tarefa TEXT,
-            status TEXT,
-            prioridade TEXT,
-            prazo TEXT
-        )
-    """)
+# Conexão com o banco de dados PostgreSQL usando variável de ambiente do Railway
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Conectar ao PostgreSQL
+conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+
+# Criando um cursor para interagir com o banco de dados
+cur = conn.cursor()
+
+# Criar a tabela (se ela não existir) - Adicionando o campo status e data de criação
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS tarefas (
+        id SERIAL PRIMARY KEY,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        status TEXT NOT NULL DEFAULT 'To Do',  -- Campo de status
+        concluida BOOLEAN NOT NULL DEFAULT FALSE,
+        data_criacao TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP  -- Data de criação
+    )
+""")
+conn.commit()
+
+# Função para criar uma tarefa
+def criar_tarefa(nome, descricao, status):
+    cur.execute("""
+        INSERT INTO tarefas (nome, descricao, status, concluida) 
+        VALUES (%s, %s, %s, %s) RETURNING id
+    """, (nome, descricao, status, False))
+    tarefa_id = cur.fetchone()[0]
     conn.commit()
-    return conn
+    return tarefa_id
 
-# Adicionar uma nova tarefa ao banco de dados
-def add_task(conn, usuario, tarefa, status, prioridade, prazo):
-    c = conn.cursor()
-    c.execute("INSERT INTO tasks (usuario, tarefa, status, prioridade, prazo) VALUES (?, ?, ?, ?, ?)",
-              (usuario, tarefa, status, prioridade, prazo))
+# Função para listar tarefas
+def listar_tarefas():
+    cur.execute("SELECT id, nome, descricao, status, concluida, data_criacao FROM tarefas")
+    return cur.fetchall()
+
+# Função para excluir tarefa
+def excluir_tarefa(tarefa_id):
+    cur.execute("DELETE FROM tarefas WHERE id = %s", (tarefa_id,))
     conn.commit()
 
-# Carregar tarefas do banco de dados
-def load_tasks(conn, usuario):
-    c = conn.cursor()
-    c.execute("SELECT id, tarefa, status, prioridade, prazo FROM tasks WHERE usuario = ?", (usuario,))
-    return pd.DataFrame(c.fetchall(), columns=["ID", "Tarefa", "Status", "Prioridade", "Prazo"])
-
-# Excluir uma tarefa do banco de dados
-def delete_task(conn, task_id):
-    c = conn.cursor()
-    c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+# Função para marcar tarefa como concluída
+def concluir_tarefa(tarefa_id):
+    cur.execute("UPDATE tarefas SET concluida = TRUE WHERE id = %s", (tarefa_id,))
     conn.commit()
 
-# Aplicação principal
-def main():
-    st.title("Gerenciador de Projetos")
-    conn = init_db()
+# Função para atualizar o status da tarefa
+def atualizar_status(tarefa_id, novo_status):
+    cur.execute("UPDATE tarefas SET status = %s WHERE id = %s", (novo_status, tarefa_id))
+    conn.commit()
 
-    # Autenticação simples
-    st.sidebar.header("Autenticação")
-    usuario = st.sidebar.text_input("Digite seu nome de usuário", "Convidado")
-    if not usuario:
-        st.warning("Por favor, insira um nome de usuário para continuar.")
-        st.stop()
+# Função para autenticar o usuário
+def autenticar_usuario():
+    if 'username' not in st.session_state:
+        st.session_state.username = None
 
-    # Menu
-    st.sidebar.header("Menu")
-    option = st.sidebar.selectbox("Escolha uma ação", ["Visualizar Tarefas", "Adicionar Nova Tarefa", "Excluir Tarefa"])
+    if st.session_state.username is None:
+        with st.form(key="login_form"):
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+            submit_button = st.form_submit_button(label="Entrar")
+            
+            if submit_button:
+                if usuario == "admin" and senha == "senha123":  # Substitua por lógica real
+                    st.session_state.username = usuario
+                    st.success(f"Bem-vindo, {usuario}!")
+                else:
+                    st.error("Usuário ou senha inválidos.")
+    else:
+        st.sidebar.write(f"Bem-vindo, {st.session_state.username}!")
+        if st.sidebar.button("Sair"):
+            st.session_state.username = None
+            st.experimental_rerun()
 
-    if option == "Visualizar Tarefas":
-        st.subheader(f"Tarefas de {usuario}")
-        tasks = load_tasks(conn, usuario)
-        if tasks.empty:
-            st.info("Nenhuma tarefa encontrada.")
-        else:
-            st.dataframe(tasks)
+# Função para exibir o menu e retornar a página escolhida
+def exibir_menu():
+    menu = ["Home", "Tarefas"]
+    escolha = st.sidebar.selectbox("Menu", menu)
 
-    elif option == "Adicionar Nova Tarefa":
-        st.subheader("Adicionar Nova Tarefa")
-        task_name = st.text_input("Nome da Tarefa")
-        task_status = st.selectbox("Status", ["To Do", "Doing", "Done"])
-        task_priority = st.selectbox("Prioridade", ["Baixa", "Média", "Alta"])
-        task_deadline = st.date_input("Prazo")
+    if escolha == "Home":
+        exibir_home()
+    elif escolha == "Tarefas":
+        exibir_tarefas()
 
-        if st.button("Salvar Tarefa"):
-            if task_name.strip():
-                add_task(conn, usuario, task_name, task_status, task_priority, str(task_deadline))
-                st.success("Tarefa adicionada com sucesso!")
+# Função para a página inicial
+def exibir_home():
+    st.title("Bem-vindo ao Gerenciador de Tarefas")
+    st.write("Aqui você pode criar, gerenciar e monitorar suas tarefas.")
+
+# Função para exibir a página de tarefas
+def exibir_tarefas():
+    st.title("Gerenciador de Tarefas")
+
+    # Formulário para criar uma nova tarefa
+    with st.form(key='task_form'):
+        nome = st.text_input("Nome da Tarefa")
+        descricao = st.text_area("Descrição")
+        status = st.selectbox("Status", ["To Do", "Doing", "Done"])  # Campo de status
+        submit_button = st.form_submit_button(label="Criar Tarefa")
+
+        if submit_button:
+            if nome and descricao:
+                tarefa_id = criar_tarefa(nome, descricao, status)
+                st.success(f"Tarefa criada com sucesso! ID: {tarefa_id}")
             else:
-                st.error("O nome da tarefa não pode ser vazio.")
+                st.error("Por favor, preencha todos os campos.")
 
-    elif option == "Excluir Tarefa":
-        st.subheader("Excluir Tarefa")
-        tasks = load_tasks(conn, usuario)
-        if tasks.empty:
-            st.info("Nenhuma tarefa encontrada para exclusão.")
-        else:
-            task_id = st.selectbox("Selecione o ID da tarefa para excluir", tasks["ID"])
-            if st.button("Excluir"):
-                delete_task(conn, task_id)
-                st.success("Tarefa excluída com sucesso!")
+    # Exibir tarefas existentes
+    tarefas = listar_tarefas()
+
+    if tarefas:
+        for tarefa in tarefas:
+            id_tarefa, nome, descricao, status, concluida, data_criacao = tarefa
+            st.write(f"**ID**: {id_tarefa}, **Nome**: {nome}, **Descrição**: {descricao}, **Status**: {status}, **Concluída**: {concluida}, **Data de Criação**: {data_criacao.strftime('%d/%m/%Y %H:%M:%S')}")
+
+            # Botão para excluir tarefa
+            if st.button(f"Excluir Tarefa {id_tarefa}"):
+                excluir_tarefa(id_tarefa)
+                st.experimental_rerun()
+
+            # Botão para marcar tarefa como concluída
+            if not concluida and st.button(f"Concluir Tarefa {id_tarefa}"):
+                concluir_tarefa(id_tarefa)
+                st.experimental_rerun()
+
+            # Opção para atualizar o status da tarefa
+            novo_status = st.selectbox(f"Atualizar status da Tarefa {id_tarefa}", ["To Do", "Doing", "Done"])
+            if st.button(f"Alterar Status para {novo_status} para Tarefa {id_tarefa}"):
+                atualizar_status(id_tarefa, novo_status)
+                st.experimental_rerun()
+
+# Função principal da interface do Streamlit
+def app():
+    autenticar_usuario()
+    
+    if st.session_state.username:
+        exibir_menu()
 
 if __name__ == "__main__":
-    main()
+    app()
