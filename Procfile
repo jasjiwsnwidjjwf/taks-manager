@@ -1,1 +1,1 @@
-web: streamlit run tasks.py
+web: streamlit run Tarefas.py
